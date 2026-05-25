@@ -1,0 +1,323 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================
+// Enums
+// =============================================================
+enum WorkspaceStatus {
+  active
+  suspended
+}
+
+enum AgentRole {
+  owner
+  admin
+  supervisor
+  agent
+}
+
+enum ChannelStatus {
+  active
+  disabled
+}
+
+enum ContactStatus {
+  active
+  blocked
+}
+
+enum ConversationStatus {
+  open
+  pending
+  closed
+}
+
+enum ConversationPriority {
+  low
+  normal
+  high
+  urgent
+}
+
+enum SenderType {
+  customer
+  agent
+  system
+  bot
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageType {
+  text
+  image
+  video
+  audio
+  file
+  sticker
+  location
+}
+
+enum SendStatus {
+  pending
+  sent
+  failed
+}
+
+enum WebhookProcessStatus {
+  pending
+  processing
+  done
+  failed
+}
+
+// =============================================================
+// Models
+// =============================================================
+model Workspace {
+  id        String          @id @default(cuid())
+  name      String
+  status    WorkspaceStatus @default(active)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  agents         Agent[]
+  lineChannels   LineChannel[]
+  contacts       Contact[]
+  conversations  Conversation[]
+  messages       Message[]
+  tags           Tag[]
+  webhookEvents  WebhookEvent[]
+
+  @@map("workspaces")
+}
+
+model Agent {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         AgentRole @default(agent)
+  isOnline     Boolean   @default(false)
+  lastSeenAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedConversations Conversation[] @relation("AssignedAgent")
+  notes              Note[]
+
+  @@index([workspaceId])
+  @@map("agents")
+}
+
+model LineChannel {
+  id                  String        @id @default(cuid())
+  workspaceId         String
+  name                String
+  channelId           String        @unique
+  channelSecret       String // encrypted at rest
+  channelAccessToken  String // encrypted at rest
+  status              ChannelStatus @default(active)
+  webhookEnabled      Boolean       @default(true)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contacts      Contact[]
+  conversations Conversation[]
+  messages      Message[]
+  webhookEvents WebhookEvent[]
+
+  @@index([workspaceId])
+  @@map("line_channels")
+}
+
+model Contact {
+  id            String        @id @default(cuid())
+  workspaceId   String
+  lineChannelId String
+  lineUserId    String
+  displayName   String?
+  pictureUrl    String?
+  status        ContactStatus @default(active)
+  lastMessageAt DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineChannel   LineChannel    @relation(fields: [lineChannelId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  messages      Message[]
+
+  @@unique([lineChannelId, lineUserId])
+  @@index([workspaceId])
+  @@index([lineChannelId, lineUserId])
+  @@map("contacts")
+}
+
+model Conversation {
+  id               String               @id @default(cuid())
+  workspaceId      String
+  lineChannelId    String
+  contactId        String
+  assignedAgentId  String?
+  status           ConversationStatus   @default(open)
+  priority         ConversationPriority @default(normal)
+  unreadCount      Int                  @default(0)
+  lastMessageAt    DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineChannel   LineChannel        @relation(fields: [lineChannelId], references: [id], onDelete: Cascade)
+  contact       Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedAgent Agent?             @relation("AssignedAgent", fields: [assignedAgentId], references: [id])
+  messages      Message[]
+  tags          ConversationTag[]
+  notes         Note[]
+
+  @@index([lineChannelId, lastMessageAt(sort: Desc)])
+  @@index([status, assignedAgentId, lastMessageAt(sort: Desc)])
+  @@index([workspaceId, status])
+  @@map("conversations")
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  workspaceId    String
+  lineChannelId  String
+  conversationId String
+  contactId      String?
+  senderType     SenderType
+  senderId       String?
+  direction      MessageDirection
+  messageType    MessageType
+  textContent    String?
+  lineMessageId  String?
+  replyToken     String?
+  sendStatus     SendStatus       @default(sent)
+  rawPayload     Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineChannel  LineChannel          @relation(fields: [lineChannelId], references: [id], onDelete: Cascade)
+  conversation Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact?             @relation(fields: [contactId], references: [id])
+  attachments  MessageAttachment[]
+  sendLogs     MessageSendLog[]
+
+  @@unique([lineChannelId, lineMessageId])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+model MessageAttachment {
+  id           String   @id @default(cuid())
+  messageId    String
+  fileName     String?
+  fileType     String
+  mimeType     String?
+  fileUrl      String
+  thumbnailUrl String?
+  fileSize     Int?
+  width        Int?
+  height       Int?
+  duration     Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("message_attachments")
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String   @default("#64748b")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace        Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversationTags ConversationTag[]
+
+  @@unique([workspaceId, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  id             String   @id @default(cuid())
+  conversationId String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, tagId])
+  @@map("conversation_tags")
+}
+
+model Note {
+  id             String   @id @default(cuid())
+  conversationId String
+  agentId        String
+  noteText       String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent        Agent        @relation(fields: [agentId], references: [id])
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@map("notes")
+}
+
+model WebhookEvent {
+  id            String               @id @default(cuid())
+  workspaceId   String?
+  lineChannelId String?
+  eventId       String?
+  eventType     String
+  payloadJson   Json
+  processStatus WebhookProcessStatus @default(pending)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  workspace   Workspace?   @relation(fields: [workspaceId], references: [id])
+  lineChannel LineChannel? @relation(fields: [lineChannelId], references: [id])
+
+  @@unique([lineChannelId, eventId])
+  @@index([processStatus, createdAt])
+  @@map("webhook_events")
+}
+
+model MessageSendLog {
+  id              String   @id @default(cuid())
+  messageId       String
+  requestPayload  Json
+  responsePayload Json?
+  statusCode      Int?
+  status          String
+  createdAt       DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("message_send_logs")
+}
