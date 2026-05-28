@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
+import IORedis from 'ioredis';
 import configuration from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -30,17 +31,27 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     BullModule.forRootAsync({
-      useFactory: () => ({
-        connection: {
-          host: process.env.REDIS_HOST ?? 'localhost',
-          port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
-          password: process.env.REDIS_PASSWORD || undefined,
-          // BullMQ requires this setting on all Redis connections
-          maxRetriesPerRequest: null,
-          // Upstash + most managed Redis providers require TLS
-          ...(process.env.REDIS_TLS === 'true' ? { tls: {} } : {}),
-        },
-      }),
+      useFactory: () => {
+        // Prefer a single REDIS_URL (e.g. Railway). family:0 lets ioredis
+        // resolve both IPv4/IPv6 — required for Railway's private network.
+        if (process.env.REDIS_URL) {
+          return {
+            connection: new IORedis(process.env.REDIS_URL, {
+              maxRetriesPerRequest: null,
+              family: 0,
+            }),
+          };
+        }
+        return {
+          connection: {
+            host: process.env.REDIS_HOST ?? 'localhost',
+            port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+            password: process.env.REDIS_PASSWORD || undefined,
+            maxRetriesPerRequest: null,
+            ...(process.env.REDIS_TLS === 'true' ? { tls: {} } : {}),
+          },
+        };
+      },
     }),
     PrismaModule,
     AuthModule,
